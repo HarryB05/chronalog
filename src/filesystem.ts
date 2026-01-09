@@ -407,54 +407,36 @@ export function savePredefinedTags(
   const configPath = path.join(configDirPath, "config.json")
 
   try {
-    console.log("[savePredefinedTags] Project root:", projectRoot)
-    console.log("[savePredefinedTags] Current working directory:", process.cwd())
-    console.log("[savePredefinedTags] Config path:", configPath)
-    console.log("[savePredefinedTags] Config path exists:", fs.existsSync(configPath))
-    console.log("[savePredefinedTags] Tags to save:", tags)
-
-    // Create chronalog directory if it doesn't exist
     if (!fs.existsSync(configDirPath)) {
       fs.mkdirSync(configDirPath, { recursive: true })
-      console.log("[savePredefinedTags] Created directory:", configDirPath)
     }
 
-    // Read existing config if it exists
     let existingConfig: Record<string, unknown> = {}
     if (fs.existsSync(configPath)) {
       try {
         const existingContent = fs.readFileSync(configPath, "utf-8")
         existingConfig = JSON.parse(existingContent)
-        console.log("[savePredefinedTags] Existing config:", existingConfig)
       } catch (error) {
         console.warn("Error reading existing config, will create new one:", error)
       }
     }
 
-    // Validate tags are strings
     const validTags = tags
       .filter((tag: unknown): tag is string => typeof tag === "string")
       .map((tag: string) => tag.trim())
       .filter((tag: string) => tag.length > 0)
       .sort()
 
-    // Remove duplicates
     const uniqueTags = Array.from(new Set(validTags))
-    console.log("[savePredefinedTags] Validated and unique tags:", uniqueTags)
 
-    // Merge with existing config, preserving other properties
     const updatedConfig = {
       ...existingConfig,
       tags: uniqueTags,
     }
 
-    // Write to JSON file
     const content = JSON.stringify(updatedConfig, null, 2)
     fs.writeFileSync(configPath, content, "utf-8")
-    console.log("[savePredefinedTags] Successfully wrote config to:", configPath)
-    console.log("[savePredefinedTags] Config content:", content)
 
-    // Verify the file was written correctly
     if (!fs.existsSync(configPath)) {
       throw new Error(`Config file was not created at ${configPath}`)
     }
@@ -466,8 +448,6 @@ export function savePredefinedTags(
         `Config file content mismatch. Expected: ${JSON.stringify(uniqueTags)}, Got: ${JSON.stringify(writtenConfig.tags)}`
       )
     }
-
-    console.log("[savePredefinedTags] Verified config file was written correctly")
 
     return { success: true }
   } catch (error) {

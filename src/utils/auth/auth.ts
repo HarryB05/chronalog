@@ -112,7 +112,6 @@ export async function getLoginSession(): Promise<LoginSession | null> {
   const token = cookieStore.get(TOKEN_NAME)?.value
 
   if (!token) {
-    console.log('No token found in cookies')
     return null
   }
 

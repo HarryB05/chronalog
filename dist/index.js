@@ -436,36 +436,26 @@ function savePredefinedTags(tags, configDir = "chronalog") {
   const configDirPath = path3.join(projectRoot, configDir);
   const configPath = path3.join(configDirPath, "config.json");
   try {
-    console.log("[savePredefinedTags] Project root:", projectRoot);
-    console.log("[savePredefinedTags] Current working directory:", process.cwd());
-    console.log("[savePredefinedTags] Config path:", configPath);
-    console.log("[savePredefinedTags] Config path exists:", fs3.existsSync(configPath));
-    console.log("[savePredefinedTags] Tags to save:", tags);
     if (!fs3.existsSync(configDirPath)) {
       fs3.mkdirSync(configDirPath, { recursive: true });
-      console.log("[savePredefinedTags] Created directory:", configDirPath);
     }
     let existingConfig = {};
     if (fs3.existsSync(configPath)) {
       try {
         const existingContent = fs3.readFileSync(configPath, "utf-8");
         existingConfig = JSON.parse(existingContent);
-        console.log("[savePredefinedTags] Existing config:", existingConfig);
       } catch (error) {
         console.warn("Error reading existing config, will create new one:", error);
       }
     }
     const validTags = tags.filter((tag) => typeof tag === "string").map((tag) => tag.trim()).filter((tag) => tag.length > 0).sort();
     const uniqueTags = Array.from(new Set(validTags));
-    console.log("[savePredefinedTags] Validated and unique tags:", uniqueTags);
     const updatedConfig = {
       ...existingConfig,
       tags: uniqueTags
     };
     const content = JSON.stringify(updatedConfig, null, 2);
     fs3.writeFileSync(configPath, content, "utf-8");
-    console.log("[savePredefinedTags] Successfully wrote config to:", configPath);
-    console.log("[savePredefinedTags] Config content:", content);
     if (!fs3.existsSync(configPath)) {
       throw new Error(`Config file was not created at ${configPath}`);
     }
@@ -476,7 +466,6 @@ function savePredefinedTags(tags, configDir = "chronalog") {
         `Config file content mismatch. Expected: ${JSON.stringify(uniqueTags)}, Got: ${JSON.stringify(writtenConfig.tags)}`
       );
     }
-    console.log("[savePredefinedTags] Verified config file was written correctly");
     return { success: true };
   } catch (error) {
     console.error("Error saving predefined tags:", error);
@@ -665,7 +654,6 @@ async function getLoginSession() {
   const cookieStore = await cookies();
   const token = cookieStore.get(TOKEN_NAME)?.value;
   if (!token) {
-    console.log("No token found in cookies");
     return null;
   }
   try {

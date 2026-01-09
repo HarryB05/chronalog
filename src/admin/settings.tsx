@@ -188,8 +188,6 @@ export default function SettingsPage() {
     setSavingTags(true)
     setTagsStatus({ type: null, message: "" })
 
-    console.log("[Settings] Saving tags:", predefinedTags)
-
     try {
       const response = await fetch("/api/changelog/tags", {
         method: "POST",
@@ -199,11 +197,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ tags: predefinedTags }),
       })
 
-      console.log("[Settings] Response status:", response.status)
-      console.log("[Settings] Response ok:", response.ok)
-
       const data = await response.json()
-      console.log("[Settings] Response data:", data)
 
       if (!response.ok) {
         throw new Error(data.error || `HTTP error! status: ${response.status}`)

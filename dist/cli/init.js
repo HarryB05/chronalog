@@ -52,7 +52,6 @@ if (!fs.existsSync(pagePath)) {
   const pageContent = `"use client"
 
 import "chronalog/chronalog.css"
-// Using flat export path for Turbopack compatibility with linked packages
 export { default } from "chronalog/admin-page"
 `;
   fs.writeFileSync(pagePath, pageContent, "utf-8");
@@ -290,7 +289,6 @@ if (!fs.existsSync(settingsPagePath)) {
   const settingsPageContent = `"use client"
 
 import "chronalog/chronalog.css"
-// Using flat export path for Turbopack compatibility with linked packages
 export { default } from "chronalog/admin-settings"
 `;
   fs.writeFileSync(settingsPagePath, settingsPageContent, "utf-8");

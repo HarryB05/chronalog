@@ -82,8 +82,6 @@ function Login() {
       Link,
       {
         href: "/api/changelog/auth/login",
-        onClick: handleLogin,
-        className: `flex w-full items-center justify-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-100 ${isLoading ? "animate-pulse" : ""} ${envCheck && !envCheck.configured ? "opacity-50 cursor-not-allowed" : ""}`,
         onClick: (e) => {
           if (envCheck && !envCheck.configured) {
             e.preventDefault();
@@ -91,6 +89,7 @@ function Login() {
             handleLogin(e);
           }
         },
+        className: `flex w-full items-center justify-center rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-50 dark:text-zinc-900 dark:hover:bg-zinc-100 ${isLoading ? "animate-pulse" : ""} ${envCheck && !envCheck.configured ? "opacity-50 cursor-not-allowed" : ""}`,
         children: [
           /* @__PURE__ */ jsx(
             "svg",

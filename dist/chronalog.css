@@ -1014,9 +1014,6 @@
   .text-zinc-950 {
     color: var(--color-zinc-950);
   }
-  .lowercase {
-    text-transform: lowercase;
-  }
   .uppercase {
     text-transform: uppercase;
   }

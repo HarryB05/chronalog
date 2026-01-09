@@ -1,9 +1,9 @@
 "use client";
 import {
   AdminLayout
-} from "../chunk-JZ76GNYZ.js";
+} from "../chunk-3FTQJUGE.js";
 import "../chunk-MRX454HA.js";
-import "../chunk-7M3BB5WV.js";
+import "../chunk-ZBPJITHK.js";
 import "../chunk-4A7WWWIL.js";
 import "../chunk-C33QSZGG.js";
 import "../chunk-VPMYIZYL.js";
@@ -151,7 +151,6 @@ function SettingsPage() {
   const handleSaveTags = async () => {
     setSavingTags(true);
     setTagsStatus({ type: null, message: "" });
-    console.log("[Settings] Saving tags:", predefinedTags);
     try {
       const response = await fetch("/api/changelog/tags", {
         method: "POST",
@@ -160,10 +159,7 @@ function SettingsPage() {
         },
         body: JSON.stringify({ tags: predefinedTags })
       });
-      console.log("[Settings] Response status:", response.status);
-      console.log("[Settings] Response ok:", response.ok);
       const data = await response.json();
-      console.log("[Settings] Response data:", data);
       if (!response.ok) {
         throw new Error(data.error || `HTTP error! status: ${response.status}`);
       }
