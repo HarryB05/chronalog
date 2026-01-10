@@ -51,3 +51,21 @@ export {
   getGitCommitHistory,
   type GitCommit,
 } from "./git.js"
+
+// GitHub API utilities (for serverless environments)
+export {
+  createGitHubClient,
+  getBranchOid,
+  getFileContent,
+  listFiles,
+  createCommit,
+  createCommitApi,
+  type CommitAPI,
+} from "./utils/github-api.js"
+
+export {
+  saveChangelogEntryViaGitHub,
+  readChangelogEntryViaGitHub,
+  listChangelogEntriesViaGitHub,
+  shouldUseGitHubAPI,
+} from "./utils/github-filesystem.js"

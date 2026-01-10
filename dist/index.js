@@ -224,6 +224,359 @@ function getDefaultConfig() {
   return { ...DEFAULT_CONFIG };
 }
 
+// src/utils/github-api.ts
+import { GraphQLClient } from "graphql-request";
+import { encode as toBase64 } from "js-base64";
+var GITHUB_GQL_API_URL = "https://api.github.com/graphql";
+function createGitHubClient(accessToken) {
+  return new GraphQLClient(GITHUB_GQL_API_URL, {
+    headers: {
+      authorization: `Bearer ${accessToken}`
+    }
+  });
+}
+async function getBranchOid(client, owner, name, branch = "main") {
+  const query = `
+    query GetBranchOid($owner: String!, $name: String!, $branch: String!) {
+      repository(owner: $owner, name: $name) {
+        ref(qualifiedName: $branch) {
+          target {
+            oid
+          }
+        }
+      }
+    }
+  `;
+  const data = await client.request(query, { owner, name, branch });
+  if (!data.repository?.ref?.target) {
+    throw new Error(`Branch ${branch} not found`);
+  }
+  return data.repository.ref.target.oid;
+}
+async function getFileContent(client, owner, name, filePath, branch = "main") {
+  const query = `
+    query GetFile($owner: String!, $name: String!, $filePath: String!) {
+      repository(owner: $owner, name: $name) {
+        object(expression: $filePath) {
+          ... on Blob {
+            text
+          }
+        }
+      }
+    }
+  `;
+  try {
+    const data = await client.request(query, {
+      owner,
+      name,
+      filePath: `${branch}:${filePath}`
+    });
+    return data.repository?.object?.text || null;
+  } catch (error) {
+    return null;
+  }
+}
+async function listFiles(client, owner, name, path4, branch = "main") {
+  const query = `
+    query ListFiles($owner: String!, $name: String!, $contentPath: String!) {
+      repository(owner: $owner, name: $name) {
+        object(expression: $contentPath) {
+          ... on Tree {
+            entries {
+              path
+              name
+              type
+            }
+          }
+        }
+      }
+    }
+  `;
+  try {
+    const data = await client.request(query, {
+      owner,
+      name,
+      contentPath: `${branch}:${path4}`
+    });
+    return data.repository?.object?.entries || [];
+  } catch (error) {
+    return [];
+  }
+}
+async function createCommit(client, owner, name, branch, oid, message, additions, deletions = []) {
+  const mutation = `
+    mutation CreateCommit($input: CreateCommitOnBranchInput!) {
+      createCommitOnBranch(input: $input) {
+        commit {
+          oid
+        }
+      }
+    }
+  `;
+  const input = {
+    branch: {
+      repositoryNameWithOwner: `${owner}/${name}`,
+      branchName: branch
+    },
+    message: {
+      headline: message
+    },
+    fileChanges: {
+      additions: additions.map((add) => ({
+        path: add.path,
+        contents: add.contents
+      })),
+      deletions: deletions.map((del) => ({
+        path: del.path
+      }))
+    },
+    expectedHeadOid: oid
+  };
+  const data = await client.request(mutation, { input });
+  return data.createCommitOnBranch.commit.oid;
+}
+function createCommitApi({
+  message,
+  owner,
+  oid,
+  name,
+  branch
+}) {
+  const additions = [];
+  const deletions = [];
+  let commitMessage = message ?? "chore: Chronalog commit";
+  let commitBody = "Automatically created by Chronalog";
+  const setMessage = (title, body) => {
+    commitMessage = title ?? commitMessage;
+    commitBody = body ?? commitBody;
+  };
+  const replaceFile = (file, contents, encode = true) => {
+    const encoded = encode === true ? toBase64(contents) : contents;
+    additions.push({ path: file, contents: encoded });
+  };
+  const removeFile = (file) => {
+    deletions.push({ path: file });
+  };
+  const createInput = () => {
+    return {
+      branch: {
+        repositoryNameWithOwner: `${owner}/${name}`,
+        branchName: branch
+      },
+      message: {
+        headline: commitMessage
+      },
+      fileChanges: {
+        additions,
+        deletions
+      },
+      expectedHeadOid: oid
+    };
+  };
+  return { setMessage, createInput, replaceFile, removeFile };
+}
+
+// src/utils/auth/constants.ts
+var TOKEN_NAME = process.env.NEXT_PUBLIC_CHRONALOG_TOKEN_NAME || "chronalog_token";
+var MAX_AGE = 60 * 60 * 24 * 30;
+var TOKEN_SECRET = process.env.CHRONALOG_TOKEN_SECRET || "chronalog-dev-secret-change-in-production";
+var COOKIE_SETTINGS = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  sameSite: "lax"
+};
+var SESSION_ERROR_MESSAGES = {
+  INVALID_SESSION: "Invalid session data",
+  SESSION_EXPIRED: "Session expired",
+  INVALID_STRUCTURE: "Invalid session structure detected"
+};
+
+// src/utils/auth/github.ts
+async function getAccessToken(code) {
+  const request = await fetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      client_id: process.env.CHRONALOG_GITHUB_ID,
+      client_secret: process.env.CHRONALOG_GITHUB_SECRET,
+      ...code
+    })
+  });
+  const text = await request.text();
+  const params = new URLSearchParams(text);
+  return {
+    access_token: params.get("access_token"),
+    expires_in: (params.get("expires_in") ? parseInt(params.get("expires_in")) : MAX_AGE) * 1e3,
+    refresh_token: params.get("refresh_token") || void 0,
+    refresh_token_expires_in: params.get("refresh_token_expires_in") ? parseInt(params.get("refresh_token_expires_in")) * 1e3 : void 0
+  };
+}
+async function fetchGitHubUser(token) {
+  const request = await fetch("https://api.github.com/user", {
+    headers: {
+      Authorization: "token " + token
+    }
+  });
+  return await request.json();
+}
+async function checkRepository(token, repoOwner, repoName) {
+  const response = await fetch(
+    `https://api.github.com/repos/${repoOwner}/${repoName}`,
+    {
+      headers: {
+        Authorization: `token ${token}`
+      }
+    }
+  );
+  return response.status === 200;
+}
+async function checkCollaborator(token, repoOwner, repoName, userName) {
+  const response = await fetch(
+    `https://api.github.com/repos/${repoOwner}/${repoName}/collaborators/${userName}`,
+    {
+      headers: {
+        Authorization: `token ${token}`
+      }
+    }
+  );
+  return response.status === 204;
+}
+function parseGitHubRepoFromUrl(url) {
+  if (!url) return null;
+  const match = url.match(/(?:github\.com[/:]|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?$/);
+  if (match) {
+    return {
+      owner: match[1],
+      name: match[2].replace(".git", "")
+    };
+  }
+  return null;
+}
+
+// src/utils/github-filesystem.ts
+function isServerlessEnvironment() {
+  return typeof process !== "undefined" && (process.env.VERCEL === "1" || process.env.CF_PAGES === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME !== void 0 || process.env.NODE_ENV === "production");
+}
+async function saveChangelogEntryViaGitHub(entry, accessToken, remoteUrl, changelogDir, branch = "main") {
+  if (!remoteUrl) {
+    throw new Error("Git remote URL is required for GitHub API operations");
+  }
+  const repoInfo = parseGitHubRepoFromUrl(remoteUrl);
+  if (!repoInfo) {
+    throw new Error("Could not parse GitHub repository from remote URL");
+  }
+  const config = loadChronalogConfig();
+  const targetDir = changelogDir || config.changelogDir;
+  let filename;
+  let originalDate;
+  if (entry.slug) {
+    filename = `${entry.slug}.mdx`;
+    const client2 = createGitHubClient(accessToken);
+    const existingContent = await getFileContent(
+      client2,
+      repoInfo.owner,
+      repoInfo.name,
+      `${targetDir}/${filename}`,
+      branch
+    );
+    if (existingContent) {
+      try {
+        const existingEntry = parseChangelogEntry(existingContent, filename);
+        originalDate = existingEntry.date;
+      } catch (error) {
+        console.warn(`Failed to parse existing entry for date preservation: ${error}`);
+      }
+    }
+  } else {
+    if (!entry.version || !entry.version.trim()) {
+      throw new Error("Version is required for changelog entries");
+    }
+    const cleanVersion = entry.version.trim().replace(/^v/i, "");
+    const versionSlug = cleanVersion.replace(/\./g, "-");
+    filename = `v${versionSlug}.mdx`;
+  }
+  const filePath = `${targetDir}/${filename}`;
+  const entryToSerialize = entry.slug && originalDate ? { ...entry, date: originalDate } : entry;
+  const mdxContent = serialiseChangelogEntry(entryToSerialize);
+  const client = createGitHubClient(accessToken);
+  const oid = await getBranchOid(client, repoInfo.owner, repoInfo.name, branch);
+  const commitMessage = config.commitMessageFormat.replace("{title}", entry.title);
+  const commitApi = createCommitApi({
+    message: commitMessage,
+    owner: repoInfo.owner,
+    oid,
+    name: repoInfo.name,
+    branch
+  });
+  commitApi.replaceFile(filePath, mdxContent);
+  const input = commitApi.createInput();
+  const newOid = await createCommit(client, repoInfo.owner, repoInfo.name, branch, oid, commitMessage, input.fileChanges.additions, input.fileChanges.deletions);
+  return {
+    filePath,
+    gitCommit: {
+      success: true
+    }
+  };
+}
+async function readChangelogEntryViaGitHub(slug, accessToken, remoteUrl, changelogDir, branch = "main") {
+  if (!remoteUrl) {
+    throw new Error("Git remote URL is required for GitHub API operations");
+  }
+  const repoInfo = parseGitHubRepoFromUrl(remoteUrl);
+  if (!repoInfo) {
+    throw new Error("Could not parse GitHub repository from remote URL");
+  }
+  const config = loadChronalogConfig();
+  const targetDir = changelogDir || config.changelogDir;
+  const filename = `${slug}.mdx`;
+  const filePath = `${targetDir}/${filename}`;
+  const client = createGitHubClient(accessToken);
+  const content = await getFileContent(client, repoInfo.owner, repoInfo.name, filePath, branch);
+  if (!content) {
+    throw new Error(`Changelog entry not found: ${slug}`);
+  }
+  return parseChangelogEntry(content, filename);
+}
+async function listChangelogEntriesViaGitHub(accessToken, remoteUrl, changelogDir, branch = "main") {
+  if (!remoteUrl) {
+    throw new Error("Git remote URL is required for GitHub API operations");
+  }
+  const repoInfo = parseGitHubRepoFromUrl(remoteUrl);
+  if (!repoInfo) {
+    throw new Error("Could not parse GitHub repository from remote URL");
+  }
+  const config = loadChronalogConfig();
+  const targetDir = changelogDir || config.changelogDir;
+  const client = createGitHubClient(accessToken);
+  const files = await listFiles(client, repoInfo.owner, repoInfo.name, targetDir, branch);
+  const mdxFiles = files.filter(
+    (file) => (file.name.endsWith(".mdx") || file.name.endsWith(".md")) && file.type === "blob"
+  );
+  const entries = [];
+  for (const file of mdxFiles) {
+    try {
+      const content = await getFileContent(client, repoInfo.owner, repoInfo.name, file.path, branch);
+      if (content) {
+        const entry = parseChangelogEntry(content, file.name);
+        entries.push(entry);
+      }
+    } catch (error) {
+      console.warn(`Failed to parse ${file.name}:`, error);
+    }
+  }
+  return entries.sort((a, b) => {
+    const dateA = new Date(a.date).getTime();
+    const dateB = new Date(b.date).getTime();
+    return dateB - dateA;
+  });
+}
+function shouldUseGitHubAPI() {
+  return isServerlessEnvironment();
+}
+
 // src/filesystem.ts
 function findProjectRoot(startDir = process.cwd()) {
   let currentDir = path3.resolve(startDir);
@@ -241,7 +594,22 @@ function findProjectRoot(startDir = process.cwd()) {
   }
   return process.cwd();
 }
-function saveChangelogEntry(entry, changelogDir, autoCommit) {
+function isServerlessEnvironment2() {
+  return typeof process !== "undefined" && (process.env.VERCEL === "1" || process.env.CF_PAGES === "1" || process.env.AWS_LAMBDA_FUNCTION_NAME !== void 0);
+}
+async function saveChangelogEntry(entry, changelogDir, autoCommit, options) {
+  if (isServerlessEnvironment2() && options?.accessToken && (options?.remoteUrl || getGitRemoteUrl())) {
+    return saveChangelogEntryViaGitHub(
+      entry,
+      options.accessToken,
+      options.remoteUrl || getGitRemoteUrl(),
+      changelogDir,
+      options.branch || "main"
+    );
+  }
+  return saveChangelogEntrySync(entry, changelogDir, autoCommit);
+}
+function saveChangelogEntrySync(entry, changelogDir, autoCommit) {
   const cwd = findProjectRoot();
   const config = loadChronalogConfig(cwd);
   const targetDir = path3.join(cwd, changelogDir || config.changelogDir);
@@ -290,7 +658,19 @@ function saveChangelogEntry(entry, changelogDir, autoCommit) {
   }
   return result;
 }
-function readChangelogEntry(slug, changelogDir) {
+async function readChangelogEntry(slug, changelogDir, options) {
+  if (isServerlessEnvironment2() && options?.accessToken && (options?.remoteUrl || getGitRemoteUrl())) {
+    return readChangelogEntryViaGitHub(
+      slug,
+      options.accessToken,
+      options.remoteUrl || getGitRemoteUrl(),
+      changelogDir,
+      options.branch || "main"
+    );
+  }
+  return readChangelogEntrySync(slug, changelogDir);
+}
+function readChangelogEntrySync(slug, changelogDir) {
   const cwd = findProjectRoot();
   const config = loadChronalogConfig(cwd);
   const targetDir = path3.join(cwd, changelogDir || config.changelogDir);
@@ -302,7 +682,24 @@ function readChangelogEntry(slug, changelogDir) {
   const content = fs3.readFileSync(filePath, "utf-8");
   return parseChangelogEntry(content, filename);
 }
-function listChangelogEntries(changelogDir) {
+async function listChangelogEntries(changelogDir, options) {
+  if (isServerlessEnvironment2() && (options?.accessToken || true) && // Try even without token for public repos
+  (options?.remoteUrl || getGitRemoteUrl())) {
+    try {
+      return await listChangelogEntriesViaGitHub(
+        options?.accessToken || "",
+        options?.remoteUrl || getGitRemoteUrl(),
+        changelogDir,
+        options?.branch || "main"
+      );
+    } catch (error) {
+      console.error("Failed to list entries via GitHub API:", error);
+      throw error;
+    }
+  }
+  return listChangelogEntriesSync(changelogDir);
+}
+function listChangelogEntriesSync(changelogDir) {
   const cwd = findProjectRoot();
   const config = loadChronalogConfig(cwd);
   const targetDir = path3.join(cwd, changelogDir || config.changelogDir);
@@ -515,88 +912,6 @@ function saveHomeUrl(homeUrl, configDir = "chronalog") {
 // src/utils/auth/auth.ts
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-
-// src/utils/auth/constants.ts
-var TOKEN_NAME = process.env.NEXT_PUBLIC_CHRONALOG_TOKEN_NAME || "chronalog_token";
-var MAX_AGE = 60 * 60 * 24 * 30;
-var TOKEN_SECRET = process.env.CHRONALOG_TOKEN_SECRET || "chronalog-dev-secret-change-in-production";
-var COOKIE_SETTINGS = {
-  httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  path: "/",
-  sameSite: "lax"
-};
-var SESSION_ERROR_MESSAGES = {
-  INVALID_SESSION: "Invalid session data",
-  SESSION_EXPIRED: "Session expired",
-  INVALID_STRUCTURE: "Invalid session structure detected"
-};
-
-// src/utils/auth/github.ts
-async function getAccessToken(code) {
-  const request = await fetch("https://github.com/login/oauth/access_token", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      client_id: process.env.CHRONALOG_GITHUB_ID,
-      client_secret: process.env.CHRONALOG_GITHUB_SECRET,
-      ...code
-    })
-  });
-  const text = await request.text();
-  const params = new URLSearchParams(text);
-  return {
-    access_token: params.get("access_token"),
-    expires_in: (params.get("expires_in") ? parseInt(params.get("expires_in")) : MAX_AGE) * 1e3,
-    refresh_token: params.get("refresh_token") || void 0,
-    refresh_token_expires_in: params.get("refresh_token_expires_in") ? parseInt(params.get("refresh_token_expires_in")) * 1e3 : void 0
-  };
-}
-async function fetchGitHubUser(token) {
-  const request = await fetch("https://api.github.com/user", {
-    headers: {
-      Authorization: "token " + token
-    }
-  });
-  return await request.json();
-}
-async function checkRepository(token, repoOwner, repoName) {
-  const response = await fetch(
-    `https://api.github.com/repos/${repoOwner}/${repoName}`,
-    {
-      headers: {
-        Authorization: `token ${token}`
-      }
-    }
-  );
-  return response.status === 200;
-}
-async function checkCollaborator(token, repoOwner, repoName, userName) {
-  const response = await fetch(
-    `https://api.github.com/repos/${repoOwner}/${repoName}/collaborators/${userName}`,
-    {
-      headers: {
-        Authorization: `token ${token}`
-      }
-    }
-  );
-  return response.status === 204;
-}
-function parseGitHubRepoFromUrl(url) {
-  if (!url) return null;
-  const match = url.match(/(?:github\.com[/:]|git@github\.com:)([^/]+)\/([^/]+?)(?:\.git)?$/);
-  if (match) {
-    return {
-      owner: match[1],
-      name: match[2].replace(".git", "")
-    };
-  }
-  return null;
-}
-
-// src/utils/auth/auth.ts
 function isValidDate(value) {
   if (value instanceof Date) return true;
   if (typeof value === "string") {
@@ -720,13 +1035,18 @@ export {
   chronalog,
   clearLoginSession,
   commitChanges,
+  createCommit,
+  createCommitApi,
+  createGitHubClient,
   extractVersion,
   fetchGitHubUser,
   filterChangelogEntriesByTags,
   generateSlug,
   getAccessToken,
   getAllTags,
+  getBranchOid,
   getDefaultConfig,
+  getFileContent,
   getGitBranch,
   getGitCommitHistory,
   getGitHubCommitUrl,
@@ -738,18 +1058,23 @@ export {
   isValidVersion,
   isWorkingDirectoryClean,
   listChangelogEntries,
+  listChangelogEntriesViaGitHub,
+  listFiles,
   listMediaFiles,
   loadChronalogConfig,
   normaliseTags,
   parseChangelogEntry,
   parseGitHubRepoFromUrl,
   readChangelogEntry,
+  readChangelogEntryViaGitHub,
   readPredefinedTags,
   saveChangelogEntry,
+  saveChangelogEntryViaGitHub,
   saveHomeUrl,
   saveMediaFile,
   savePredefinedTags,
   serialiseChangelogEntry,
   setLoginSession,
+  shouldUseGitHubAPI,
   stageFile
 };

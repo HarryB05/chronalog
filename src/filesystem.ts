@@ -2,8 +2,14 @@ import fs from "fs"
 import path from "path"
 import type { ParsedChangelogEntry, SaveChangelogRequest } from "./types.js"
 import { generateSlug, parseChangelogEntry, serialiseChangelogEntry } from "./mdx.js"
-import { autoCommitChangelog } from "./git.js"
+import { autoCommitChangelog, getGitRemoteUrl } from "./git.js"
 import { loadChronalogConfig } from "./config.js"
+import {
+  saveChangelogEntryViaGitHub,
+  readChangelogEntryViaGitHub,
+  listChangelogEntriesViaGitHub,
+  shouldUseGitHubAPI,
+} from "./utils/github-filesystem.js"
 
 /**
  * Finds the project root directory by looking for package.json or other indicators
@@ -52,13 +58,56 @@ export interface SaveChangelogResult {
 }
 
 /**
+ * Detects if we're in a serverless environment
+ */
+function isServerlessEnvironment(): boolean {
+  return (
+    typeof process !== 'undefined' &&
+    (process.env.VERCEL === '1' ||
+      process.env.CF_PAGES === '1' ||
+      process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined)
+  )
+}
+
+/**
  * Saves a changelog entry to the filesystem and optionally commits to Git
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param entry The changelog entry to save
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
  * @param autoCommit Whether to automatically commit to Git (default: from config or true)
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns The result with file path and Git commit status
  */
-export function saveChangelogEntry(
+export async function saveChangelogEntry(
+  entry: SaveChangelogRequest,
+  changelogDir?: string,
+  autoCommit?: boolean,
+  options?: { accessToken?: string; remoteUrl?: string | null; branch?: string }
+): Promise<SaveChangelogResult> {
+  // Use GitHub API if in serverless environment and we have the required info
+  if (
+    isServerlessEnvironment() &&
+    options?.accessToken &&
+    (options?.remoteUrl || getGitRemoteUrl())
+  ) {
+    return saveChangelogEntryViaGitHub(
+      entry,
+      options.accessToken,
+      options.remoteUrl || getGitRemoteUrl(),
+      changelogDir,
+      options.branch || 'main'
+    )
+  }
+
+  // Fall back to filesystem operations
+  return saveChangelogEntrySync(entry, changelogDir, autoCommit)
+}
+
+/**
+ * Saves a changelog entry to the filesystem (synchronous, for local development)
+ * @internal
+ */
+function saveChangelogEntrySync(
   entry: SaveChangelogRequest,
   changelogDir?: string,
   autoCommit?: boolean
@@ -142,11 +191,41 @@ export function saveChangelogEntry(
 
 /**
  * Reads a changelog entry from the filesystem
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param slug The slug of the changelog entry
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns The parsed changelog entry
  */
-export function readChangelogEntry(
+export async function readChangelogEntry(
+  slug: string,
+  changelogDir?: string,
+  options?: { accessToken?: string; remoteUrl?: string | null; branch?: string }
+): Promise<ParsedChangelogEntry> {
+  // Use GitHub API if in serverless environment and we have the required info
+  if (
+    isServerlessEnvironment() &&
+    options?.accessToken &&
+    (options?.remoteUrl || getGitRemoteUrl())
+  ) {
+    return readChangelogEntryViaGitHub(
+      slug,
+      options.accessToken,
+      options.remoteUrl || getGitRemoteUrl(),
+      changelogDir,
+      options.branch || 'main'
+    )
+  }
+
+  // Fall back to filesystem operations
+  return readChangelogEntrySync(slug, changelogDir)
+}
+
+/**
+ * Reads a changelog entry from the filesystem (synchronous, for local development)
+ * @internal
+ */
+function readChangelogEntrySync(
   slug: string,
   changelogDir?: string
 ): ParsedChangelogEntry {
@@ -166,10 +245,45 @@ export function readChangelogEntry(
 
 /**
  * Lists all changelog entries
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns Array of parsed changelog entries
  */
-export function listChangelogEntries(
+export async function listChangelogEntries(
+  changelogDir?: string,
+  options?: { accessToken?: string; remoteUrl?: string | null; branch?: string }
+): Promise<ParsedChangelogEntry[]> {
+  // Use GitHub API if in serverless environment and we have the required info
+  // For public repos, we can try without access token
+  if (
+    isServerlessEnvironment() &&
+    (options?.accessToken || true) && // Try even without token for public repos
+    (options?.remoteUrl || getGitRemoteUrl())
+  ) {
+    try {
+      return await listChangelogEntriesViaGitHub(
+        options?.accessToken || '',
+        options?.remoteUrl || getGitRemoteUrl(),
+        changelogDir,
+        options?.branch || 'main'
+      )
+    } catch (error) {
+      // If GitHub API fails and we're in serverless, we can't fall back to filesystem
+      console.error('Failed to list entries via GitHub API:', error)
+      throw error
+    }
+  }
+
+  // Fall back to filesystem operations
+  return listChangelogEntriesSync(changelogDir)
+}
+
+/**
+ * Lists all changelog entries (synchronous, for local development)
+ * @internal
+ */
+function listChangelogEntriesSync(
   changelogDir?: string
 ): ParsedChangelogEntry[] {
   const cwd = findProjectRoot()

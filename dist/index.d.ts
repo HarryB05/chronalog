@@ -1,5 +1,6 @@
 import { SaveChangelogRequest, ParsedChangelogEntry } from './client.js';
 export { ChangelogEntry, extractVersion, generateSlug, incrementVersion, isValidVersion, normaliseTags, parseChangelogEntry, serialiseChangelogEntry } from './client.js';
+import { GraphQLClient } from 'graphql-request';
 
 /**
  * Result of saving a changelog entry
@@ -13,25 +14,43 @@ interface SaveChangelogResult {
 }
 /**
  * Saves a changelog entry to the filesystem and optionally commits to Git
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param entry The changelog entry to save
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
  * @param autoCommit Whether to automatically commit to Git (default: from config or true)
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns The result with file path and Git commit status
  */
-declare function saveChangelogEntry(entry: SaveChangelogRequest, changelogDir?: string, autoCommit?: boolean): SaveChangelogResult;
+declare function saveChangelogEntry(entry: SaveChangelogRequest, changelogDir?: string, autoCommit?: boolean, options?: {
+    accessToken?: string;
+    remoteUrl?: string | null;
+    branch?: string;
+}): Promise<SaveChangelogResult>;
 /**
  * Reads a changelog entry from the filesystem
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param slug The slug of the changelog entry
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns The parsed changelog entry
  */
-declare function readChangelogEntry(slug: string, changelogDir?: string): ParsedChangelogEntry;
+declare function readChangelogEntry(slug: string, changelogDir?: string, options?: {
+    accessToken?: string;
+    remoteUrl?: string | null;
+    branch?: string;
+}): Promise<ParsedChangelogEntry>;
 /**
  * Lists all changelog entries
+ * Automatically uses GitHub API in serverless environments if access token is provided
  * @param changelogDir The directory where changelog files are stored (default: from config or "changelog")
+ * @param options Optional: accessToken and remoteUrl for GitHub API mode
  * @returns Array of parsed changelog entries
  */
-declare function listChangelogEntries(changelogDir?: string): ParsedChangelogEntry[];
+declare function listChangelogEntries(changelogDir?: string, options?: {
+    accessToken?: string;
+    remoteUrl?: string | null;
+    branch?: string;
+}): Promise<ParsedChangelogEntry[]>;
 /**
  * Filters changelog entries by tags
  * @param entries Array of changelog entries to filter
@@ -241,6 +260,87 @@ declare function parseGitHubRepoFromUrl(url: string | null): {
     name: string;
 } | null;
 
+/**
+ * Creates a GraphQL client for GitHub API
+ */
+declare function createGitHubClient(accessToken: string): GraphQLClient;
+/**
+ * Gets the current branch OID (commit SHA)
+ */
+declare function getBranchOid(client: GraphQLClient, owner: string, name: string, branch?: string): Promise<string>;
+/**
+ * Gets file content from GitHub
+ */
+declare function getFileContent(client: GraphQLClient, owner: string, name: string, filePath: string, branch?: string): Promise<string | null>;
+/**
+ * Lists files in a directory
+ */
+declare function listFiles(client: GraphQLClient, owner: string, name: string, path: string, branch?: string): Promise<Array<{
+    path: string;
+    name: string;
+    type: string;
+}>>;
+/**
+ * Creates a commit with file changes
+ */
+declare function createCommit(client: GraphQLClient, owner: string, name: string, branch: string, oid: string, message: string, additions: Array<{
+    path: string;
+    contents: string;
+}>, deletions?: Array<{
+    path: string;
+}>): Promise<string>;
+/**
+ * Helper to create a commit API similar to Outstatic
+ */
+interface CommitAPI {
+    setMessage: (title: string, body?: string) => void;
+    replaceFile: (file: string, contents: string, encode?: boolean) => void;
+    removeFile: (file: string) => void;
+    createInput: () => {
+        branch: {
+            repositoryNameWithOwner: string;
+            branchName: string;
+        };
+        message: {
+            headline: string;
+        };
+        fileChanges: {
+            additions: Array<{
+                path: string;
+                contents: string;
+            }>;
+            deletions: Array<{
+                path: string;
+            }>;
+        };
+        expectedHeadOid: string;
+    };
+}
+declare function createCommitApi({ message, owner, oid, name, branch, }: {
+    message: string;
+    owner: string;
+    oid: string;
+    name: string;
+    branch: string;
+}): CommitAPI;
+
+/**
+ * Saves a changelog entry using GitHub API
+ */
+declare function saveChangelogEntryViaGitHub(entry: SaveChangelogRequest, accessToken: string, remoteUrl: string | null, changelogDir?: string, branch?: string): Promise<SaveChangelogResult>;
+/**
+ * Reads a changelog entry using GitHub API
+ */
+declare function readChangelogEntryViaGitHub(slug: string, accessToken: string, remoteUrl: string | null, changelogDir?: string, branch?: string): Promise<ParsedChangelogEntry>;
+/**
+ * Lists all changelog entries using GitHub API
+ */
+declare function listChangelogEntriesViaGitHub(accessToken: string, remoteUrl: string | null, changelogDir?: string, branch?: string): Promise<ParsedChangelogEntry[]>;
+/**
+ * Determines if we should use GitHub API based on environment
+ */
+declare function shouldUseGitHubAPI(): boolean;
+
 declare function chronalog(): string;
 
-export { type ChronalogConfig, type GitCommit, type LoginSession, ParsedChangelogEntry, SaveChangelogRequest, type SaveChangelogResult, autoCommitChangelog, checkCollaborator, checkRepository, chronalog, clearLoginSession, commitChanges, fetchGitHubUser, filterChangelogEntriesByTags, getAccessToken, getAllTags, getDefaultConfig, getGitBranch, getGitCommitHistory, getGitHubCommitUrl, getGitRemoteUrl, getLoginSession, isGitInstalled, isGitRepository, isWorkingDirectoryClean, listChangelogEntries, listMediaFiles, loadChronalogConfig, parseGitHubRepoFromUrl, readChangelogEntry, readPredefinedTags, saveChangelogEntry, saveHomeUrl, saveMediaFile, savePredefinedTags, setLoginSession, stageFile };
+export { type ChronalogConfig, type CommitAPI, type GitCommit, type LoginSession, ParsedChangelogEntry, SaveChangelogRequest, type SaveChangelogResult, autoCommitChangelog, checkCollaborator, checkRepository, chronalog, clearLoginSession, commitChanges, createCommit, createCommitApi, createGitHubClient, fetchGitHubUser, filterChangelogEntriesByTags, getAccessToken, getAllTags, getBranchOid, getDefaultConfig, getFileContent, getGitBranch, getGitCommitHistory, getGitHubCommitUrl, getGitRemoteUrl, getLoginSession, isGitInstalled, isGitRepository, isWorkingDirectoryClean, listChangelogEntries, listChangelogEntriesViaGitHub, listFiles, listMediaFiles, loadChronalogConfig, parseGitHubRepoFromUrl, readChangelogEntry, readChangelogEntryViaGitHub, readPredefinedTags, saveChangelogEntry, saveChangelogEntryViaGitHub, saveHomeUrl, saveMediaFile, savePredefinedTags, setLoginSession, shouldUseGitHubAPI, stageFile };
