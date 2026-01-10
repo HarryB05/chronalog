@@ -26,9 +26,6 @@ importers:
       '@tiptap/starter-kit':
         specifier: ^3.15.3
         version: 3.15.3
-      chronalog:
-        specifier: link:../../../../Library/pnpm/global/5/node_modules/chronalog
-        version: link:../../../../Library/pnpm/global/5/node_modules/chronalog
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
