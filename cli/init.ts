@@ -28,20 +28,27 @@ if (!hasNext) {
   process.exit(1)
 }
 
-const appDir = path.join(cwd, "app")
+// Check for app directory in standard location or src/app
+const appDir = fs.existsSync(path.join(cwd, "app")) 
+  ? path.join(cwd, "app")
+  : fs.existsSync(path.join(cwd, "src", "app"))
+  ? path.join(cwd, "src", "app")
+  : null
+
 const pagesDir = path.join(cwd, "pages")
+const srcPagesDir = path.join(cwd, "src", "pages")
 
 // Check if app directory exists, if not check for pages directory
-if (!fs.existsSync(appDir)) {
-  if (fs.existsSync(pagesDir)) {
+if (!appDir) {
+  if (fs.existsSync(pagesDir) || fs.existsSync(srcPagesDir)) {
     console.error("❌ Error: Chronalog requires Next.js App Router (app directory), but this project uses Pages Router (pages directory).")
     console.error("   Please migrate to App Router or create an app directory in your Next.js project.")
     console.error("   See: https://nextjs.org/docs/app/building-your-application/upgrading/app-router-migration")
     process.exit(1)
   } else {
     console.error("❌ Error: No app directory found. Chronalog requires Next.js App Router.")
-    console.error("   Please create an app directory in your Next.js project root.")
-    console.error("   You can create it with: mkdir app")
+    console.error("   Please create an app directory in your Next.js project root or in src/app.")
+    console.error("   You can create it with: mkdir app  or  mkdir -p src/app")
     process.exit(1)
   }
 }
