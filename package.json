@@ -50,9 +50,21 @@
       "default": "./dist/admin/settings.js"
     },
     "./chronalog.css": "./dist/chronalog.css",
-    "./admin-page": "./dist/admin/page.js",
-    "./admin-media": "./dist/admin/media.js",
-    "./admin-settings": "./dist/admin/settings.js"
+    "./admin-page": {
+      "types": "./dist/admin/page.d.ts",
+      "import": "./dist/admin/page.js",
+      "default": "./dist/admin/page.js"
+    },
+    "./admin-media": {
+      "types": "./dist/admin/media.d.ts",
+      "import": "./dist/admin/media.js",
+      "default": "./dist/admin/media.js"
+    },
+    "./admin-settings": {
+      "types": "./dist/admin/settings.d.ts",
+      "import": "./dist/admin/settings.js",
+      "default": "./dist/admin/settings.js"
+    }
   },
   "bin": {
     "chronalog": "./dist/cli/init.js"
