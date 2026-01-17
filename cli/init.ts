@@ -222,6 +222,9 @@ if (!fs.existsSync(apiListRoutePath)) {
   const apiListRouteContent = `import { NextResponse } from "next/server";
 import { listChangelogEntries, getLoginSession, getGitRemoteUrl, getGitBranch } from "chronalog";
 
+// Cache for 5 minutes, revalidate on demand
+export const revalidate = 300;
+
 export async function GET() {
   try {
     // Get session for access token (optional for public repos)
@@ -234,7 +237,7 @@ export async function GET() {
     const accessToken = session?.access_token || process.env.CHRONALOG_GITHUB_TOKEN || undefined;
 
     // List changelog entries (uses GitHub API in serverless, filesystem in dev)
-    // For public repos, we can try without access token
+    // Uses batch fetching with GraphQL when token is available, parallel fetching otherwise
     const entries = await listChangelogEntries(undefined, {
       accessToken,
       remoteUrl,
@@ -246,7 +249,12 @@ export async function GET() {
         success: true,
         entries,
       },
-      { status: 200 }
+      { 
+        status: 200,
+        headers: {
+          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+        },
+      }
     );
   } catch (error) {
     console.error("Error listing changelog entries:", error);
@@ -1280,8 +1288,9 @@ if (!fs.existsSync(changelogPagePath)) {
 import { GET as getChangelogList } from "../api/changelog/list/route";
 import { ChangelogTimeline } from "./ChangelogTimeline";
 
-// Force dynamic rendering since we fetch data at request time
-export const dynamic = 'force-dynamic';
+// Use ISR (Incremental Static Regeneration) for better performance
+// Revalidate every 5 minutes to keep content fresh
+export const revalidate = 300;
 
 export const metadata: Metadata = {
   title: "Changelog",

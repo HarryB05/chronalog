@@ -4,6 +4,7 @@ import {
   createGitHubClient,
   getBranchOid,
   getFileContent,
+  getMultipleFileContents,
   listFiles,
   createCommit,
   createCommitApi,
@@ -314,51 +315,97 @@ export async function listChangelogEntriesViaGitHub(
     (file) => (file.name.endsWith('.mdx') || file.name.endsWith('.md')) && file.type === 'blob'
   )
 
-  // Read and parse each file
   const entries: ParsedChangelogEntry[] = []
 
-  for (const file of mdxFiles) {
+  // Use batch fetching if we have an access token (most efficient)
+  if (accessToken && mdxFiles.length > 0) {
     try {
-      let content: string | null = null
+      const client = createGitHubClient(accessToken)
+      const filePaths = mdxFiles.map((file) => file.path)
       
-      if (accessToken) {
-        // Use GraphQL with auth
-        const client = createGitHubClient(accessToken)
-        content = await getFileContent(client, repoInfo.owner, repoInfo.name, file.path, branch)
-      } else {
-        // Use REST API for public repos
+      // Batch fetch all files in a single GraphQL query
+      const fileContents = await getMultipleFileContents(
+        client,
+        repoInfo.owner,
+        repoInfo.name,
+        filePaths,
+        branch
+      )
+
+      // Parse all entries
+      for (const file of mdxFiles) {
         try {
-          const url = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.name}/contents/${file.path}?ref=${branch}`
-          const response = await fetch(url)
-          if (response.ok) {
-            const data = await response.json()
-            if (data.content && data.encoding === 'base64') {
-              content = Buffer.from(data.content, 'base64').toString('utf-8')
-            } else {
-              console.warn(`[Chronalog] File ${file.name} missing content or wrong encoding:`, {
-                hasContent: !!data.content,
-                encoding: data.encoding,
-              })
-            }
-          } else {
-            const errorText = await response.text().catch(() => 'Could not read error response')
-            console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API (${response.status}):`, {
-              status: response.status,
-              statusText: response.statusText,
-              errorBody: errorText,
-            })
+          const content = fileContents.get(file.path)
+          if (content) {
+            const entry = parseChangelogEntry(content, file.name)
+            entries.push(entry)
           }
         } catch (error) {
-          console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API:`, error)
+          console.warn(`[Chronalog] Failed to parse ${file.name}:`, error)
         }
       }
-      
-      if (content) {
-        const entry = parseChangelogEntry(content, file.name)
+    } catch (error) {
+      console.warn('[Chronalog] Batch fetching failed, falling back to parallel fetching:', error)
+      // Fall through to parallel fetching
+    }
+  }
+
+  // Fallback: Parallel fetching (for public repos or if batch fetching failed)
+  if (entries.length === 0 && mdxFiles.length > 0) {
+    const filePromises = mdxFiles.map(async (file) => {
+      try {
+        let content: string | null = null
+        
+        if (accessToken) {
+          // Use GraphQL with auth (individual requests)
+          const client = createGitHubClient(accessToken)
+          content = await getFileContent(client, repoInfo.owner, repoInfo.name, file.path, branch)
+        } else {
+          // Use REST API for public repos
+          try {
+            const url = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.name}/contents/${file.path}?ref=${branch}`
+            const response = await fetch(url)
+            if (response.ok) {
+              const data = await response.json()
+              if (data.content && data.encoding === 'base64') {
+                content = Buffer.from(data.content, 'base64').toString('utf-8')
+              } else {
+                console.warn(`[Chronalog] File ${file.name} missing content or wrong encoding:`, {
+                  hasContent: !!data.content,
+                  encoding: data.encoding,
+                })
+              }
+            } else {
+              const errorText = await response.text().catch(() => 'Could not read error response')
+              console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API (${response.status}):`, {
+                status: response.status,
+                statusText: response.statusText,
+                errorBody: errorText,
+              })
+            }
+          } catch (error) {
+            console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API:`, error)
+          }
+        }
+        
+        if (content) {
+          return parseChangelogEntry(content, file.name)
+        }
+        return null
+      } catch (error) {
+        console.warn(`[Chronalog] Failed to parse ${file.name}:`, error)
+        return null
+      }
+    })
+
+    // Wait for all files to be fetched in parallel
+    const results = await Promise.all(filePromises)
+    
+    // Filter out null results and add to entries
+    for (const entry of results) {
+      if (entry) {
         entries.push(entry)
       }
-    } catch (error) {
-      console.warn(`Failed to parse ${file.name}:`, error)
     }
   }
 

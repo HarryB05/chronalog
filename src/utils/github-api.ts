@@ -197,6 +197,90 @@ export async function createCommit(
 }
 
 /**
+ * Batch fetches multiple file contents in a single GraphQL query
+ * This is much more efficient than fetching files individually
+ * @param client GraphQL client with authentication
+ * @param owner Repository owner
+ * @param name Repository name
+ * @param filePaths Array of file paths to fetch
+ * @param branch Branch name (default: 'main')
+ * @returns Map of file path to file content (or null if not found)
+ */
+export async function getMultipleFileContents(
+  client: GraphQLClient,
+  owner: string,
+  name: string,
+  filePaths: string[],
+  branch: string = 'main'
+): Promise<Map<string, string | null>> {
+  if (filePaths.length === 0) {
+    return new Map()
+  }
+
+  // GitHub GraphQL API has query complexity limits
+  // We'll batch files in chunks of 50 to avoid hitting limits
+  const BATCH_SIZE = 50
+  const batches: string[][] = []
+  
+  for (let i = 0; i < filePaths.length; i += BATCH_SIZE) {
+    batches.push(filePaths.slice(i, i + BATCH_SIZE))
+  }
+
+  const allResults = new Map<string, string | null>()
+
+  // Process each batch
+  for (const batch of batches) {
+    // Build GraphQL query with aliases for each file
+    // Note: We use string interpolation for expressions since GraphQL aliases must be static
+    // The branch and path values are safe as they come from our controlled inputs
+    const queries = batch.map((path, index) => {
+      const alias = `file${index}`
+      // Construct the expression: branch:path
+      // Escape any special characters in the path for GraphQL
+      const escapedPath = path.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      const expression = `${branch}:${escapedPath}`
+      return `
+      ${alias}: repository(owner: $owner, name: $name) {
+        object(expression: "${expression}") {
+          ... on Blob {
+            text
+          }
+        }
+      }
+    `
+    }).join('\n')
+
+    const query = `
+      query GetMultipleFiles($owner: String!, $name: String!) {
+        ${queries}
+      }
+    `
+
+    try {
+      const data = await client.request<Record<string, { object: { text: string } | null }>>(
+        query,
+        { owner, name }
+      )
+
+      // Map results back to file paths
+      batch.forEach((path, index) => {
+        const alias = `file${index}`
+        const fileData = data[alias]
+        allResults.set(path, fileData?.object?.text || null)
+      })
+    } catch (error) {
+      console.error('[Chronalog] Error batch fetching files:', error)
+      // On error, set all files in batch to null
+      batch.forEach((path) => {
+        allResults.set(path, null)
+      })
+    }
+  }
+
+  return allResults
+}
+
+/**
  * Helper to create a commit API similar to Outstatic
  */
 export interface CommitAPI {

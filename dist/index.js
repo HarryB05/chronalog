@@ -359,6 +359,55 @@ async function createCommit(client, owner, name, branch, oid, message, additions
   const data = await client.request(mutation, { input });
   return data.createCommitOnBranch.commit.oid;
 }
+async function getMultipleFileContents(client, owner, name, filePaths, branch = "main") {
+  if (filePaths.length === 0) {
+    return /* @__PURE__ */ new Map();
+  }
+  const BATCH_SIZE = 50;
+  const batches = [];
+  for (let i = 0; i < filePaths.length; i += BATCH_SIZE) {
+    batches.push(filePaths.slice(i, i + BATCH_SIZE));
+  }
+  const allResults = /* @__PURE__ */ new Map();
+  for (const batch of batches) {
+    const queries = batch.map((path4, index) => {
+      const alias = `file${index}`;
+      const escapedPath = path4.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+      const expression = `${branch}:${escapedPath}`;
+      return `
+      ${alias}: repository(owner: $owner, name: $name) {
+        object(expression: "${expression}") {
+          ... on Blob {
+            text
+          }
+        }
+      }
+    `;
+    }).join("\n");
+    const query = `
+      query GetMultipleFiles($owner: String!, $name: String!) {
+        ${queries}
+      }
+    `;
+    try {
+      const data = await client.request(
+        query,
+        { owner, name }
+      );
+      batch.forEach((path4, index) => {
+        const alias = `file${index}`;
+        const fileData = data[alias];
+        allResults.set(path4, fileData?.object?.text || null);
+      });
+    } catch (error) {
+      console.error("[Chronalog] Error batch fetching files:", error);
+      batch.forEach((path4) => {
+        allResults.set(path4, null);
+      });
+    }
+  }
+  return allResults;
+}
 function createCommitApi({
   message,
   owner,
@@ -680,44 +729,79 @@ async function listChangelogEntriesViaGitHub(accessToken, remoteUrl, changelogDi
     (file) => (file.name.endsWith(".mdx") || file.name.endsWith(".md")) && file.type === "blob"
   );
   const entries = [];
-  for (const file of mdxFiles) {
+  if (accessToken && mdxFiles.length > 0) {
     try {
-      let content = null;
-      if (accessToken) {
-        const client = createGitHubClient(accessToken);
-        content = await getFileContent(client, repoInfo.owner, repoInfo.name, file.path, branch);
-      } else {
+      const client = createGitHubClient(accessToken);
+      const filePaths = mdxFiles.map((file) => file.path);
+      const fileContents = await getMultipleFileContents(
+        client,
+        repoInfo.owner,
+        repoInfo.name,
+        filePaths,
+        branch
+      );
+      for (const file of mdxFiles) {
         try {
-          const url = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.name}/contents/${file.path}?ref=${branch}`;
-          const response = await fetch(url);
-          if (response.ok) {
-            const data = await response.json();
-            if (data.content && data.encoding === "base64") {
-              content = Buffer.from(data.content, "base64").toString("utf-8");
-            } else {
-              console.warn(`[Chronalog] File ${file.name} missing content or wrong encoding:`, {
-                hasContent: !!data.content,
-                encoding: data.encoding
-              });
-            }
-          } else {
-            const errorText = await response.text().catch(() => "Could not read error response");
-            console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API (${response.status}):`, {
-              status: response.status,
-              statusText: response.statusText,
-              errorBody: errorText
-            });
+          const content = fileContents.get(file.path);
+          if (content) {
+            const entry = parseChangelogEntry(content, file.name);
+            entries.push(entry);
           }
         } catch (error) {
-          console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API:`, error);
+          console.warn(`[Chronalog] Failed to parse ${file.name}:`, error);
         }
       }
-      if (content) {
-        const entry = parseChangelogEntry(content, file.name);
+    } catch (error) {
+      console.warn("[Chronalog] Batch fetching failed, falling back to parallel fetching:", error);
+    }
+  }
+  if (entries.length === 0 && mdxFiles.length > 0) {
+    const filePromises = mdxFiles.map(async (file) => {
+      try {
+        let content = null;
+        if (accessToken) {
+          const client = createGitHubClient(accessToken);
+          content = await getFileContent(client, repoInfo.owner, repoInfo.name, file.path, branch);
+        } else {
+          try {
+            const url = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.name}/contents/${file.path}?ref=${branch}`;
+            const response = await fetch(url);
+            if (response.ok) {
+              const data = await response.json();
+              if (data.content && data.encoding === "base64") {
+                content = Buffer.from(data.content, "base64").toString("utf-8");
+              } else {
+                console.warn(`[Chronalog] File ${file.name} missing content or wrong encoding:`, {
+                  hasContent: !!data.content,
+                  encoding: data.encoding
+                });
+              }
+            } else {
+              const errorText = await response.text().catch(() => "Could not read error response");
+              console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API (${response.status}):`, {
+                status: response.status,
+                statusText: response.statusText,
+                errorBody: errorText
+              });
+            }
+          } catch (error) {
+            console.warn(`[Chronalog] Failed to fetch ${file.name} via REST API:`, error);
+          }
+        }
+        if (content) {
+          return parseChangelogEntry(content, file.name);
+        }
+        return null;
+      } catch (error) {
+        console.warn(`[Chronalog] Failed to parse ${file.name}:`, error);
+        return null;
+      }
+    });
+    const results = await Promise.all(filePromises);
+    for (const entry of results) {
+      if (entry) {
         entries.push(entry);
       }
-    } catch (error) {
-      console.warn(`Failed to parse ${file.name}:`, error);
     }
   }
   return entries.sort((a, b) => {
